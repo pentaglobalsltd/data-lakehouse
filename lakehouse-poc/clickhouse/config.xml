@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <!-- Logging -->
+    <logger>
+        <level>warning</level>
+        <console>1</console>
+    </logger>
+
+    <!-- Ports -->
+    <http_port>8123</http_port>
+    <tcp_port>9000</tcp_port>
+    <interserver_http_port>9009</interserver_http_port>
+
+    <!-- Network: listen on all interfaces -->
+    <listen_host>::</listen_host>
+    <listen_host>0.0.0.0</listen_host>
+
+    <!-- Memory limits (32 GB VM — allow up to 8 GB for ClickHouse) -->
+    <max_server_memory_usage_to_ram_ratio>0.25</max_server_memory_usage_to_ram_ratio>
+
+    <!-- Connection limits -->
+    <max_connections>1024</max_connections>
+    <keep_alive_timeout>3</keep_alive_timeout>
+    <max_concurrent_queries>100</max_concurrent_queries>
+
+    <!-- Default user (no password for POC) -->
+    <users_config>users.xml</users_config>
+    <access_control_improvements>
+        <users_without_row_policies_can_read_rows>true</users_without_row_policies_can_read_rows>
+    </access_control_improvements>
+
+    <!-- Data storage -->
+    <path>/var/lib/clickhouse/</path>
+    <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>
+    <user_files_path>/var/lib/clickhouse/user_files/</user_files_path>
+    <format_schema_path>/var/lib/clickhouse/format_schemas/</format_schema_path>
+</clickhouse>

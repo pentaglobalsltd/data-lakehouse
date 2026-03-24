@@ -1,0 +1,38 @@
+{
+  "name": "pg-lakehouse-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "lakeuser",
+    "database.password": "lakepass",
+    "database.dbname": "lakedb",
+
+    "topic.prefix": "cdc",
+    "plugin.name": "pgoutput",
+    "publication.name": "dbz_publication",
+    "slot.name": "debezium_slot",
+    "snapshot.mode": "initial",
+
+    "table.include.list": "public.customers,public.products,public.orders",
+
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.add.fields": "op",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "transforms.unwrap.drop.tombstones": "false",
+
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+
+    "decimal.handling.mode": "string",
+    "time.precision.mode": "connect",
+
+    "heartbeat.interval.ms": "10000",
+    "poll.interval.ms": "1000"
+  }
+}

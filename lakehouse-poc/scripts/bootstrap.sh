@@ -142,12 +142,11 @@ build_flink_jar() {
   info "Building Flink fat JAR..."
   cd "$PROJECT_DIR"
   mvn package -f flink-jobs/pom.xml -DskipTests -q
-  FAR_JAR=$(find flink-jobs/target -name "*-fat.jar" | head -1)
-  if [ -z "$FAR_JAR" ]; then
+  BUILT_FAT_JAR=$(find flink-jobs/target -name "*-fat.jar" | head -1)
+  if [ -z "$BUILT_FAT_JAR" ]; then
     error "Fat JAR not found after Maven build"
   fi
-  info "Built: ${FAR_JAR}"
-  echo "$FAR_JAR"
+  info "Built: ${BUILT_FAT_JAR}"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -385,8 +384,8 @@ main() {
   install_java_maven
   start_services
   register_connector
-  FAT_JAR=$(build_flink_jar)
-  submit_flink_job "$FAT_JAR"
+  build_flink_jar
+  submit_flink_job "$BUILT_FAT_JAR"
   wait_for_bronze_data
   create_trino_views
   setup_clickhouse

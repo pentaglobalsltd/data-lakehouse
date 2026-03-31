@@ -333,8 +333,25 @@ public class KafkaToIcebergJob {
          */
         private static TimestampData toTimestamp(Object v) {
             if (v == null) return null;
-            long millis = ((Number) v).longValue();
-            return TimestampData.fromEpochMillis(millis);
+            if (v instanceof Number) {
+                long millis = ((Number) v).longValue();
+                return TimestampData.fromEpochMillis(millis);
+            }
+            // Debezium may send timestamps as ISO string (e.g. "2026-03-24T11:42:15.858Z")
+            String s = v.toString();
+            try {
+                java.time.Instant instant = java.time.Instant.parse(s);
+                return TimestampData.fromEpochMillis(instant.toEpochMilli());
+            } catch (Exception e1) {
+                try {
+                    java.time.LocalDateTime ldt = java.time.LocalDateTime.parse(s,
+                        java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd['T'][' ']HH:mm:ss[.SSSSSS][.SSS]"));
+                    return TimestampData.fromEpochMillis(
+                        ldt.toInstant(java.time.ZoneOffset.UTC).toEpochMilli());
+                } catch (Exception e2) {
+                    return TimestampData.fromEpochMillis(0L);
+                }
+            }
         }
 
         /**

@@ -184,7 +184,10 @@ services:
     networks: [lakehouse]
     ports:
       - "8082:8081"
-    command: jobmanager
+    command: >
+      bash -c "mkdir -p /opt/flink/plugins/s3-fs-hadoop &&
+      cp /opt/flink/opt/flink-s3-fs-hadoop-1.18.1.jar /opt/flink/plugins/s3-fs-hadoop/ &&
+      /docker-entrypoint.sh jobmanager"
     environment:
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
@@ -210,7 +213,10 @@ services:
     container_name: flink-taskmanager
     restart: unless-stopped
     networks: [lakehouse]
-    command: taskmanager
+    command: >
+      bash -c "mkdir -p /opt/flink/plugins/s3-fs-hadoop &&
+      cp /opt/flink/opt/flink-s3-fs-hadoop-1.18.1.jar /opt/flink/plugins/s3-fs-hadoop/ &&
+      /docker-entrypoint.sh taskmanager"
     depends_on:
       flink-jobmanager:
         condition: service_healthy

@@ -228,8 +228,7 @@ create_trino_views() {
 # ═══════════════════════════════════════════════════════════════════════════
 setup_clickhouse() {
   info "Creating ClickHouse order_agg table..."
-  curl -sf http://localhost:8123/ \
-    --data-urlencode "query=
+  curl -sf http://localhost:8123/ -d "
     CREATE TABLE IF NOT EXISTS default.order_agg (
         city            String,
         total_revenue   Float64,

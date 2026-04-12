@@ -18,8 +18,7 @@ trino() { docker exec trino trino \
             --server http://localhost:8080 \
             --output-format TSV \
             --execute "$1" 2>/dev/null | tail -1 | tr -d '[:space:]'; }
-ch()    { curl -sf "http://localhost:8123/" \
-            --data-urlencode "query=$1" | tr -d '[:space:]'; }
+ch()    { curl -sf "http://localhost:8123/" -d "$1" | tr -d '[:space:]'; }
 
 echo ""
 echo "════════════════════════════════════════════════════════"

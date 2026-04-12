@@ -70,7 +70,7 @@ docker exec trino trino --server http://localhost:8080 --execute "
   INSERT INTO clickhouse.default.order_agg
   SELECT city, CAST(total_revenue AS DOUBLE), CAST(order_count AS BIGINT), CAST(avg_order_value AS DOUBLE)
   FROM lakehouse.gold.order_summary
-" 2>/dev/null || info "ClickHouse population from gold view failed (views may not exist yet)"
+" 2>&1 || info "ClickHouse population from gold view failed"
 
 CH_COUNT=$(ch "SELECT count(*) FROM default.order_agg" || echo "0")
 if [ "${CH_COUNT:-0}" -gt 0 ] 2>/dev/null; then

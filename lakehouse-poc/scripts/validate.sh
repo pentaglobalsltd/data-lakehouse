@@ -46,7 +46,7 @@ PRODUCT_ID=$(pg "SELECT id FROM products ORDER BY id LIMIT 1;" | tr -d '[:space:
 C_ID=$(pg "SELECT id FROM customers WHERE id != ${CUSTOMER_ID} ORDER BY id LIMIT 1;" | tr -d '[:space:]')
 
 INSERT_ID=$(pg "INSERT INTO orders (customer_id, product_id, quantity, total_amount, status) \
-  VALUES (${C_ID}, ${PRODUCT_ID}, 3, 999.00, 'pending') RETURNING id;" | tr -d '[:space:]')
+  VALUES (${C_ID}, ${PRODUCT_ID}, 3, 999.00, 'pending') RETURNING id;" | head -1 | tr -d '[:space:]')
 
 info "Inserted order id=${INSERT_ID}. Waiting 30s for CDC propagation..."
 sleep 30

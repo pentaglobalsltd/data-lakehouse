@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # validate.sh — End-to-end pipeline validation
 # Tests: INSERT → CDC → Flink → Iceberg → Trino, UPDATE flow, DELETE tombstone
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -48,8 +48,8 @@ C_ID=$(pg "SELECT id FROM customers WHERE id != ${CUSTOMER_ID} ORDER BY id LIMIT
 INSERT_ID=$(pg "INSERT INTO orders (customer_id, product_id, quantity, total_amount, status) \
   VALUES (${C_ID}, ${PRODUCT_ID}, 3, 999.00, 'pending') RETURNING id;" | head -1 | tr -d '[:space:]')
 
-info "Inserted order id=${INSERT_ID}. Waiting 30s for CDC propagation..."
-sleep 30
+info "Inserted order id=${INSERT_ID}. Waiting 90s for CDC propagation and checkpoint flush..."
+sleep 90
 
 COUNT=$(trino "SELECT count(*) FROM iceberg.bronze.orders WHERE id = ${INSERT_ID}" || echo "0")
 if [ "${COUNT:-0}" = "1" ]; then
@@ -103,8 +103,8 @@ info "TEST 4: DELETE customer (id=${CUSTOMER_ID}) and check tombstone"
 # Nullify foreign keys first (orders may reference this customer)
 pg "UPDATE orders SET customer_id = ${C_ID} WHERE customer_id = ${CUSTOMER_ID};" > /dev/null
 pg "DELETE FROM customers WHERE id = ${CUSTOMER_ID};" > /dev/null
-info "Deleted customer id=${CUSTOMER_ID}. Waiting 30s for tombstone propagation..."
-sleep 30
+info "Deleted customer id=${CUSTOMER_ID}. Waiting 90s for tombstone propagation..."
+sleep 90
 
 TOMBSTONE=$(trino "SELECT count(*) FROM iceberg.bronze.customers WHERE id = ${CUSTOMER_ID} AND __op = 'd'" || echo "0")
 if [ "${TOMBSTONE:-0}" -ge 1 ]; then

@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # create-views.sh — Create Trino silver and gold views over Iceberg bronze tables
 # Can be run standalone or called from bootstrap.sh / trino-init container
-set -euo pipefail
+set -uo pipefail
 
 TRINO_HOST="${TRINO_HOST:-localhost}"
 TRINO_PORT="${TRINO_PORT:-8080}"
 
 trino_exec() {
-  trino --server "http://${TRINO_HOST}:${TRINO_PORT}" --execute "$1" 2>/dev/null
+  if ! trino --server "http://${TRINO_HOST}:${TRINO_PORT}" --execute "$1" 2>&1; then
+    echo "[create-views] WARNING: command failed, continuing..."
+  fi
 }
 
 echo "[create-views] Creating schemas..."

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # create-views.sh — Create Trino silver and gold views over Iceberg bronze tables
-# Can be run standalone or called from bootstrap.sh / trino-init container
+# Views live in the 'lakehouse' memory catalog (Iceberg REST doesn't support views)
 set -uo pipefail
 
 TRINO_HOST="${TRINO_HOST:-localhost}"
@@ -12,13 +12,13 @@ trino_exec() {
   fi
 }
 
-echo "[create-views] Creating schemas..."
-trino_exec "CREATE SCHEMA IF NOT EXISTS iceberg.silver"
-trino_exec "CREATE SCHEMA IF NOT EXISTS iceberg.gold"
+echo "[create-views] Creating schemas in memory catalog..."
+trino_exec "CREATE SCHEMA IF NOT EXISTS lakehouse.silver"
+trino_exec "CREATE SCHEMA IF NOT EXISTS lakehouse.gold"
 
 echo "[create-views] Creating silver.customers..."
 trino_exec "
-CREATE OR REPLACE VIEW iceberg.silver.customers AS
+CREATE OR REPLACE VIEW lakehouse.silver.customers AS
 WITH ranked AS (
   SELECT *,
          ROW_NUMBER() OVER (PARTITION BY id ORDER BY updated_at DESC) AS rn
@@ -32,7 +32,7 @@ WHERE rn = 1
 
 echo "[create-views] Creating silver.products..."
 trino_exec "
-CREATE OR REPLACE VIEW iceberg.silver.products AS
+CREATE OR REPLACE VIEW lakehouse.silver.products AS
 WITH ranked AS (
   SELECT *,
          ROW_NUMBER() OVER (PARTITION BY id ORDER BY updated_at DESC) AS rn
@@ -46,7 +46,7 @@ WHERE rn = 1
 
 echo "[create-views] Creating silver.orders..."
 trino_exec "
-CREATE OR REPLACE VIEW iceberg.silver.orders AS
+CREATE OR REPLACE VIEW lakehouse.silver.orders AS
 WITH ranked AS (
   SELECT *,
          ROW_NUMBER() OVER (PARTITION BY id ORDER BY updated_at DESC) AS rn
@@ -60,14 +60,14 @@ WHERE rn = 1
 
 echo "[create-views] Creating gold.order_summary..."
 trino_exec "
-CREATE OR REPLACE VIEW iceberg.gold.order_summary AS
+CREATE OR REPLACE VIEW lakehouse.gold.order_summary AS
 SELECT
   c.city,
   SUM(o.total_amount)  AS total_revenue,
   COUNT(o.id)          AS order_count,
   AVG(o.total_amount)  AS avg_order_value
-FROM iceberg.silver.orders o
-JOIN iceberg.silver.customers c ON o.customer_id = c.id
+FROM lakehouse.silver.orders o
+JOIN lakehouse.silver.customers c ON o.customer_id = c.id
 GROUP BY c.city
 "
 

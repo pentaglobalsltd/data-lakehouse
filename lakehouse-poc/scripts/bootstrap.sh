@@ -249,7 +249,7 @@ setup_clickhouse() {
       CAST(total_revenue    AS DOUBLE),
       CAST(order_count      AS BIGINT),
       CAST(avg_order_value  AS DOUBLE)
-    FROM iceberg.gold.order_summary
+    FROM lakehouse.gold.order_summary
     " 2>/dev/null || warn "ClickHouse population via Trino failed — run manually after bronze tables fill"
 
   info "ClickHouse setup complete."

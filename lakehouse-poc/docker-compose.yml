@@ -189,6 +189,7 @@ services:
       cp /opt/flink/opt/flink-s3-fs-hadoop-1.18.1.jar /opt/flink/plugins/s3-fs-hadoop/ &&
       /docker-entrypoint.sh jobmanager"
     environment:
+      AWS_REGION: us-east-1
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         jobmanager.memory.process.size: 1g
@@ -221,6 +222,7 @@ services:
       flink-jobmanager:
         condition: service_healthy
     environment:
+      AWS_REGION: us-east-1
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         taskmanager.memory.process.size: 2g

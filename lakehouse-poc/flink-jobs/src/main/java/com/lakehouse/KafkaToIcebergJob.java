@@ -182,6 +182,7 @@ public class KafkaToIcebergJob {
         props.put("s3.secret-access-key", MINIO_SECRET_KEY);
         props.put("s3.path-style-access", "true");
         props.put("s3.region",            "us-east-1");
+        props.put("client.region",        "us-east-1");
         return props;
     }
 

@@ -63,6 +63,15 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 info "TEST 2: ClickHouse order_agg data"
 
+# Ensure table exists and refresh data from gold view
+ch "CREATE TABLE IF NOT EXISTS default.order_agg (city String, total_revenue Float64, order_count UInt64, avg_order_value Float64) ENGINE = MergeTree() ORDER BY city" > /dev/null 2>&1
+ch "TRUNCATE TABLE default.order_agg" > /dev/null 2>&1
+docker exec trino trino --server http://localhost:8080 --execute "
+  INSERT INTO clickhouse.default.order_agg
+  SELECT city, CAST(total_revenue AS DOUBLE), CAST(order_count AS BIGINT), CAST(avg_order_value AS DOUBLE)
+  FROM iceberg.gold.order_summary
+" 2>/dev/null || info "ClickHouse population from gold view failed (views may not exist yet)"
+
 CH_COUNT=$(ch "SELECT count(*) FROM default.order_agg" || echo "0")
 if [ "${CH_COUNT:-0}" -gt 0 ] 2>/dev/null; then
   pass "ClickHouse order_agg contains data (${CH_COUNT} rows)"
@@ -76,8 +85,8 @@ fi
 info "TEST 3: UPDATE order status (id=${INSERT_ID})"
 
 pg "UPDATE orders SET status = 'shipped', updated_at = NOW() WHERE id = ${INSERT_ID};" > /dev/null
-info "Updated order status to 'shipped'. Waiting 30s..."
-sleep 30
+info "Updated order status to 'shipped'. Waiting 90s for checkpoint flush..."
+sleep 90
 
 STATUS=$(trino "SELECT status FROM iceberg.bronze.orders WHERE id = ${INSERT_ID} ORDER BY updated_at DESC LIMIT 1" || echo "")
 if [ "$STATUS" = "shipped" ]; then

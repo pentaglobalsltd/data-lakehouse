@@ -248,19 +248,6 @@ services:
     volumes:
       - ./trino/config.properties:/etc/trino/config.properties
       - ./trino/catalog:/etc/trino/catalog
-      - ./scripts/create-views.sh:/create-views.sh:ro
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        /usr/lib/trino/bin/run-trino &
-        TRINO_PID=$$!
-        # Wait for Trino to be ready, then create views in background
-        (while ! curl -sf http://localhost:8080/v1/status > /dev/null 2>&1; do sleep 5; done
-         sleep 5
-         TRINO_HOST=localhost TRINO_PORT=8080 bash /create-views.sh || true
-        ) &
-        wait $$TRINO_PID
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/status"]
       interval: 10s
@@ -268,7 +255,7 @@ services:
       retries: 20
       start_period: 30s
 
-  # ─── Trino view init (one-shot) ────────────────────────────────────────────
+  # ─── Trino view init (one-shot, re-runs on every compose up) ──────────────
   trino-init:
     image: trinodb/trino:438
     container_name: trino-init
@@ -281,7 +268,18 @@ services:
     environment:
       TRINO_HOST: trino
       TRINO_PORT: "8080"
-    entrypoint: ["/bin/bash", "/create-views.sh"]
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        echo "Waiting for Trino catalog to be ready..."
+        for i in $(seq 1 30); do
+          if trino --server http://trino:8080 --execute "SHOW SCHEMAS IN iceberg" >/dev/null 2>&1; then
+            break
+          fi
+          sleep 5
+        done
+        bash /create-views.sh
 
   # ─── ClickHouse ───────────────────────────────────────────────────────────
   clickhouse:

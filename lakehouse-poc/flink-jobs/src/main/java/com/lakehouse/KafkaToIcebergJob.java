@@ -139,10 +139,23 @@ public class KafkaToIcebergJob {
                 .setTopics(topic)
                 .setGroupId(CONSUMER_GROUP)
                 .setStartingOffsets(OffsetsInitializer.earliest())
-                .setValueOnlyDeserializer(new SimpleStringSchema())
+                .setValueOnlyDeserializer(new NullSafeStringSchema())
                 .build();
 
-        return env.fromSource(source, WatermarkStrategy.noWatermarks(), "kafka-" + uid);
+        return env.fromSource(source, WatermarkStrategy.noWatermarks(), "kafka-" + uid)
+                .filter(s -> s != null).name("drop-tombstones-" + uid);
+    }
+
+    /**
+     * Like SimpleStringSchema but returns null instead of throwing NPE
+     * when the Kafka record value is null (tombstone records).
+     */
+    static class NullSafeStringSchema extends SimpleStringSchema {
+        @Override
+        public String deserialize(byte[] message) {
+            if (message == null) return null;
+            return super.deserialize(message);
+        }
     }
 
     // ── Catalog helpers ─────────────────────────────────────────────────────

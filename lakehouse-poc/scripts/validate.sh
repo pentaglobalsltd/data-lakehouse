@@ -63,11 +63,12 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 info "TEST 2: ClickHouse order_agg data"
 
-# Ensure table exists and refresh data from gold view
-ch "CREATE TABLE IF NOT EXISTS default.order_agg (city String, total_revenue Float64, order_count UInt64, avg_order_value Float64) ENGINE = MergeTree() ORDER BY city" > /dev/null 2>&1
+# Create table in ClickHouse directly, then populate via Trino
+ch "CREATE TABLE IF NOT EXISTS default.order_agg (city String, total_revenue Float64, order_count UInt64, avg_order_value Float64) ENGINE = MergeTree() ORDER BY city"
 ch "TRUNCATE TABLE default.order_agg" > /dev/null 2>&1
+sleep 2
 docker exec trino trino --server http://localhost:8080 --execute "
-  INSERT INTO clickhouse.default.order_agg
+  INSERT INTO clickhouse.default.order_agg (city, total_revenue, order_count, avg_order_value)
   SELECT city, CAST(total_revenue AS DOUBLE), CAST(order_count AS BIGINT), CAST(avg_order_value AS DOUBLE)
   FROM lakehouse.gold.order_summary
 " 2>&1 || info "ClickHouse population from gold view failed"

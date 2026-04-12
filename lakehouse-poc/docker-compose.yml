@@ -249,6 +249,18 @@ services:
       - ./trino/config.properties:/etc/trino/config.properties
       - ./trino/catalog:/etc/trino/catalog
       - ./scripts/create-views.sh:/create-views.sh:ro
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        /usr/lib/trino/bin/run-trino &
+        TRINO_PID=$$!
+        # Wait for Trino to be ready, then create views in background
+        (while ! curl -sf http://localhost:8080/v1/status > /dev/null 2>&1; do sleep 5; done
+         sleep 5
+         TRINO_HOST=localhost TRINO_PORT=8080 bash /create-views.sh || true
+        ) &
+        wait $$TRINO_PID
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/status"]
       interval: 10s

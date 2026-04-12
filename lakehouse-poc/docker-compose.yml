@@ -248,12 +248,28 @@ services:
     volumes:
       - ./trino/config.properties:/etc/trino/config.properties
       - ./trino/catalog:/etc/trino/catalog
+      - ./scripts/create-views.sh:/create-views.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/status"]
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 30s
+
+  # ─── Trino view init (one-shot) ────────────────────────────────────────────
+  trino-init:
+    image: trinodb/trino:438
+    container_name: trino-init
+    networks: [lakehouse]
+    depends_on:
+      trino:
+        condition: service_healthy
+    volumes:
+      - ./scripts/create-views.sh:/create-views.sh:ro
+    environment:
+      TRINO_HOST: trino
+      TRINO_PORT: "8080"
+    entrypoint: ["/bin/bash", "/create-views.sh"]
 
   # ─── ClickHouse ───────────────────────────────────────────────────────────
   clickhouse:

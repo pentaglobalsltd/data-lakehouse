@@ -219,72 +219,7 @@ wait_for_bronze_data() {
 # ═══════════════════════════════════════════════════════════════════════════
 create_trino_views() {
   info "Creating Trino silver and gold views..."
-
-  trino_exec() {
-    docker exec trino trino \
-      --server http://localhost:8080 \
-      --execute "$1" 2>/dev/null
-  }
-
-  # Silver namespace
-  trino_exec "CREATE SCHEMA IF NOT EXISTS iceberg.silver"
-  trino_exec "CREATE SCHEMA IF NOT EXISTS iceberg.gold"
-
-  # Silver: customers (latest per id, exclude deletes)
-  trino_exec "
-  CREATE OR REPLACE VIEW iceberg.silver.customers AS
-  WITH ranked AS (
-    SELECT *,
-           ROW_NUMBER() OVER (PARTITION BY id ORDER BY updated_at DESC) AS rn
-    FROM iceberg.bronze.customers
-    WHERE __op != 'd'
-  )
-  SELECT id, name, email, city, created_at, updated_at, __op
-  FROM ranked
-  WHERE rn = 1
-  "
-
-  # Silver: products
-  trino_exec "
-  CREATE OR REPLACE VIEW iceberg.silver.products AS
-  WITH ranked AS (
-    SELECT *,
-           ROW_NUMBER() OVER (PARTITION BY id ORDER BY updated_at DESC) AS rn
-    FROM iceberg.bronze.products
-    WHERE __op != 'd'
-  )
-  SELECT id, name, category, price, stock, created_at, updated_at, __op
-  FROM ranked
-  WHERE rn = 1
-  "
-
-  # Silver: orders
-  trino_exec "
-  CREATE OR REPLACE VIEW iceberg.silver.orders AS
-  WITH ranked AS (
-    SELECT *,
-           ROW_NUMBER() OVER (PARTITION BY id ORDER BY updated_at DESC) AS rn
-    FROM iceberg.bronze.orders
-    WHERE __op != 'd'
-  )
-  SELECT id, customer_id, product_id, quantity, total_amount, status, created_at, updated_at, __op
-  FROM ranked
-  WHERE rn = 1
-  "
-
-  # Gold: order_summary (task 6.5)
-  trino_exec "
-  CREATE OR REPLACE VIEW iceberg.gold.order_summary AS
-  SELECT
-    c.city,
-    SUM(o.total_amount)  AS total_revenue,
-    COUNT(o.id)          AS order_count,
-    AVG(o.total_amount)  AS avg_order_value
-  FROM iceberg.silver.orders o
-  JOIN iceberg.silver.customers c ON o.customer_id = c.id
-  GROUP BY c.city
-  "
-
+  docker exec -e TRINO_HOST=localhost -e TRINO_PORT=8080 trino bash /create-views.sh
   info "Trino views created."
 }
 

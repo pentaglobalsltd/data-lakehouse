@@ -3,11 +3,10 @@
 # Views live in the 'lakehouse' memory catalog (Iceberg REST doesn't support views)
 set -uo pipefail
 
-TRINO_HOST="${TRINO_HOST:-localhost}"
-TRINO_PORT="${TRINO_PORT:-8080}"
+TRINO_CONTAINER="${TRINO_CONTAINER:-trino}"
 
 trino_exec() {
-  if ! trino --server "http://${TRINO_HOST}:${TRINO_PORT}" --execute "$1" 2>&1; then
+  if ! docker exec "$TRINO_CONTAINER" trino --execute "$1" 2>&1; then
     echo "[create-views] WARNING: command failed, continuing..."
   fi
 }

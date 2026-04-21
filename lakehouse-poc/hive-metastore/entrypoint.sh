@@ -4,18 +4,14 @@
 # container (alpine + wget) so this script never needs a download tool.
 set -e
 
-JDBC_SRC="/opt/hive/lib/extra/postgresql-jdbc.jar"
 JDBC_DST="/opt/hive/lib/postgresql-jdbc.jar"
 
-# ── 1. Copy JDBC driver into Hive's lib directory ────────────────────────
-if [ -f "$JDBC_SRC" ]; then
-    cp "$JDBC_SRC" "$JDBC_DST"
-    echo "[hive-metastore] JDBC driver copied from hive_lib volume."
-else
-    echo "[hive-metastore] ERROR: $JDBC_SRC not found."
-    echo "  The hive-lib-init container should have downloaded it. Check its logs."
+# ── 1. Verify JDBC driver is present (bind-mounted from host) ─────────────
+if [ ! -f "$JDBC_DST" ]; then
+    echo "[hive-metastore] ERROR: $JDBC_DST not found. Ensure postgresql-42.6.0.jar exists in hive-metastore/ on the host."
     exit 1
 fi
+echo "[hive-metastore] JDBC driver present at $JDBC_DST."
 
 # ── 2. Wait for PostgreSQL TCP ────────────────────────────────────────────
 echo "[hive-metastore] Waiting for PostgreSQL at postgres:5432..."

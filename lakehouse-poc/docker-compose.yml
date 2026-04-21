@@ -235,7 +235,7 @@ services:
     volumes:
       - ./hive-metastore/entrypoint.sh:/init/entrypoint.sh:ro
       - ./hive-metastore/metastore-site.xml:/opt/hive/conf/metastore-site.xml:ro
-      - hive_lib:/opt/hive/lib/extra:ro
+      - ./hive-metastore/postgresql-42.6.0.jar:/opt/hive/lib/postgresql-jdbc.jar:ro
     entrypoint: ["/bin/bash", "/init/entrypoint.sh"]
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9083' 2>/dev/null && echo ok"]

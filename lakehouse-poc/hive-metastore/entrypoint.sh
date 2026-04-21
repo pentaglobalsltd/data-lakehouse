@@ -25,12 +25,21 @@ for i in $(seq 1 60); do
 done
 
 # ── 3. Initialise metastore schema (idempotent) ───────────────────────────
+# Pass connection params explicitly — schematool reads hive-site.xml, not
+# metastore-site.xml, so SERVICE_OPTS properties are not picked up.
+PG_URL="jdbc:postgresql://postgres:5432/metastore"
+PG_DRIVER="org.postgresql.Driver"
+PG_USER="${POSTGRES_USER:-lakeuser}"
+PG_PASS="${POSTGRES_PASSWORD:-lakepass}"
+
+SCHEMA_ARGS="-dbType postgres -url ${PG_URL} -driver ${PG_DRIVER} -userName ${PG_USER} -passWord ${PG_PASS}"
+
 echo "[hive-metastore] Checking metastore schema..."
-if /opt/hive/bin/schematool -dbType postgres -validate > /dev/null 2>&1; then
+if /opt/hive/bin/schematool ${SCHEMA_ARGS} -validate > /dev/null 2>&1; then
     echo "[hive-metastore] Schema already initialised."
 else
     echo "[hive-metastore] Initialising schema via schematool..."
-    /opt/hive/bin/schematool -dbType postgres -initSchema
+    /opt/hive/bin/schematool ${SCHEMA_ARGS} -initSchema
     echo "[hive-metastore] Schema initialised."
 fi
 

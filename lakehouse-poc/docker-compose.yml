@@ -223,10 +223,9 @@ services:
     environment:
       SERVICE_NAME: metastore
       DB_DRIVER: postgres
-      # IS_RESUME=true tells the standard /entrypoint.sh to skip its own schematool
-      # run — our custom entrypoint handles schema init idempotently.
       IS_RESUME: "true"
-      # SERVICE_OPTS: JDBC config as JVM system properties (official mechanism).
+      POSTGRES_USER: ${POSTGRES_USER:-lakeuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lakepass}
       SERVICE_OPTS: >-
         -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
         -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/metastore

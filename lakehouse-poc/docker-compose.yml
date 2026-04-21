@@ -197,6 +197,15 @@ services:
     environment:
       SERVICE_NAME: metastore
       DB_DRIVER: postgres
+      IS_RESUME: "true"
+      # SERVICE_OPTS passes JDBC config as JVM system properties — the officially
+      # supported mechanism for the apache/hive image. Belt-and-suspenders alongside
+      # metastore-site.xml so the connection works even if the XML isn't picked up.
+      SERVICE_OPTS: >-
+        -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
+        -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/metastore
+        -Djavax.jdo.option.ConnectionUserName=${POSTGRES_USER:-lakeuser}
+        -Djavax.jdo.option.ConnectionPassword=${POSTGRES_PASSWORD:-lakepass}
     volumes:
       - ./hive-metastore/entrypoint.sh:/init/entrypoint.sh:ro
       - ./hive-metastore/metastore-site.xml:/opt/hive/conf/metastore-site.xml:ro

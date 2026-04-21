@@ -36,14 +36,19 @@
     <value>/tmp/hive-warehouse</value>
   </property>
 
-  <!-- Schema verification -->
+  <!-- Schema management: let DataNucleus create/update tables if missing.
+       verification=false avoids HMS refusing to start on minor version mismatches. -->
   <property>
     <name>datanucleus.schema.autoCreateAll</name>
-    <value>false</value>
+    <value>true</value>
+  </property>
+  <property>
+    <name>datanucleus.autoCreateSchema</name>
+    <value>true</value>
   </property>
   <property>
     <name>hive.metastore.schema.verification</name>
-    <value>true</value>
+    <value>false</value>
   </property>
 
   <!-- Disable auth in metastore (Trino handles its own auth) -->

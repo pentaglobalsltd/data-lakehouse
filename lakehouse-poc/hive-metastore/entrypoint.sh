@@ -1,56 +1,62 @@
 #!/bin/bash
-# Custom entrypoint for apache/hive:3.1.3 running as HMS only.
-# Copies the Postgres JDBC driver (mounted from host via bootstrap.sh download),
-# initializes the metastore schema in Postgres, then delegates to the
-# standard Hive entrypoint.
+# Custom entrypoint for apache/hive:3.1.3 (metastore only).
+# Ensures the PostgreSQL JDBC driver is present, waits for Postgres,
+# initialises the metastore schema once, then starts HMS via the
+# standard image entrypoint with IS_RESUME=true (skip its own schematool).
 set -e
 
-# The host dir ./hive-metastore/ is mounted at /opt/hive/lib/extra/
-# bootstrap.sh downloads postgresql-jdbc.jar there before compose up.
 EXTRA_LIB="/opt/hive/lib/extra"
 JDBC_JAR="/opt/hive/lib/postgresql-jdbc.jar"
 JDBC_URL="https://jdbc.postgresql.org/download/postgresql-42.6.0.jar"
 
-if [ ! -f "$JDBC_JAR" ]; then
-  if [ -f "${EXTRA_LIB}/postgresql-jdbc.jar" ]; then
+# ── 1. Obtain the PostgreSQL JDBC driver ──────────────────────────────────
+if [ -f "${EXTRA_LIB}/postgresql-jdbc.jar" ]; then
     cp "${EXTRA_LIB}/postgresql-jdbc.jar" "$JDBC_JAR"
-    echo "[hive-metastore] Copied JDBC driver from mounted volume."
-  else
-    echo "[hive-metastore] Downloading PostgreSQL JDBC driver (not pre-downloaded)..."
+    echo "[hive-metastore] JDBC driver copied from pre-downloaded volume."
+else
+    echo "[hive-metastore] JDBC driver not pre-downloaded; fetching from internet..."
+    # apache/hive:3.1.3 is Ubuntu-based but ships without curl or wget.
+    # Install wget via apt if needed (fast, ~300 KB).
+    if ! command -v wget &>/dev/null && ! command -v curl &>/dev/null; then
+        echo "[hive-metastore] Installing wget..."
+        apt-get update -qq 2>/dev/null && apt-get install -y -qq wget 2>/dev/null
+    fi
     if command -v wget &>/dev/null; then
-      wget -q -O "$JDBC_JAR" "$JDBC_URL"
+        wget -q -O "$JDBC_JAR" "$JDBC_URL"
     elif command -v curl &>/dev/null; then
-      curl -fsSL -o "$JDBC_JAR" "$JDBC_URL"
+        curl -fsSL -o "$JDBC_JAR" "$JDBC_URL"
     else
-      echo "[hive-metastore] ERROR: neither wget nor curl found. Run bootstrap.sh first to pre-download the JDBC jar."
-      exit 1
+        echo "[hive-metastore] ERROR: no download tool available and jar not pre-downloaded."
+        echo "  Run bootstrap.sh first, or manually place postgresql-jdbc.jar in ./hive-metastore/"
+        exit 1
     fi
     echo "[hive-metastore] JDBC driver downloaded."
-  fi
 fi
 
-# Wait for Postgres TCP (port 5432)
-echo "[hive-metastore] Waiting for PostgreSQL at postgres:5432 ..."
+# ── 2. Wait for PostgreSQL TCP ────────────────────────────────────────────
+echo "[hive-metastore] Waiting for PostgreSQL at postgres:5432..."
 for i in $(seq 1 60); do
-  if bash -c 'exec 3<>/dev/tcp/postgres/5432' 2>/dev/null; then
-    echo "[hive-metastore] PostgreSQL is reachable."
-    break
-  fi
-  echo "[hive-metastore] Waiting for PostgreSQL ($i/60)..."
-  sleep 3
+    if bash -c 'exec 3<>/dev/tcp/postgres/5432' 2>/dev/null; then
+        echo "[hive-metastore] PostgreSQL is reachable."
+        break
+    fi
+    echo "[hive-metastore] Still waiting for PostgreSQL ($i/60)..."
+    sleep 3
 done
 
-# Initialize or validate Hive Metastore schema in Postgres
+# ── 3. Initialise metastore schema (idempotent) ───────────────────────────
 echo "[hive-metastore] Checking metastore schema..."
 if /opt/hive/bin/schematool -dbType postgres -validate > /dev/null 2>&1; then
-  echo "[hive-metastore] Metastore schema already initialized and valid."
+    echo "[hive-metastore] Schema already initialised and valid."
 else
-  echo "[hive-metastore] Initializing metastore schema..."
-  /opt/hive/bin/schematool -dbType postgres -initSchema
-  echo "[hive-metastore] Schema initialized."
+    echo "[hive-metastore] Running schematool -initSchema..."
+    /opt/hive/bin/schematool -dbType postgres -initSchema
+    echo "[hive-metastore] Schema initialised."
 fi
 
-# Start the metastore service via the standard Hive entrypoint
+# ── 4. Delegate to the standard Hive entrypoint ───────────────────────────
+# IS_RESUME=true tells it to skip its own schematool run since we did it above.
 export SERVICE_NAME=metastore
-echo "[hive-metastore] Starting Hive Metastore thrift server on :9083 ..."
+export IS_RESUME=true
+echo "[hive-metastore] Starting HMS thrift server on :9083..."
 exec /entrypoint.sh

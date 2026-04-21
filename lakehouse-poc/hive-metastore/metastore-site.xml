@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+
+  <!-- Postgres backend for HMS schema storage -->
+  <property>
+    <name>javax.jdo.option.ConnectionURL</name>
+    <value>jdbc:postgresql://postgres:5432/metastore</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionDriverName</name>
+    <value>org.postgresql.Driver</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionUserName</name>
+    <value>lakeuser</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionPassword</name>
+    <value>lakepass</value>
+  </property>
+
+  <!-- Thrift server binding -->
+  <property>
+    <name>metastore.thrift.uris</name>
+    <value>thrift://0.0.0.0:9083</value>
+  </property>
+  <property>
+    <name>hive.metastore.port</name>
+    <value>9083</value>
+  </property>
+
+  <!-- Warehouse dir — views only, no physical data written here -->
+  <property>
+    <name>hive.metastore.warehouse.dir</name>
+    <value>/tmp/hive-warehouse</value>
+  </property>
+
+  <!-- Schema verification -->
+  <property>
+    <name>datanucleus.schema.autoCreateAll</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>hive.metastore.schema.verification</name>
+    <value>true</value>
+  </property>
+
+  <!-- Disable auth in metastore (Trino handles its own auth) -->
+  <property>
+    <name>hive.metastore.event.db.notification.api.auth</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>metastore.task.threads.always</name>
+    <value>org.apache.hadoop.hive.metastore.events.EventCleanerTask</value>
+  </property>
+
+</configuration>

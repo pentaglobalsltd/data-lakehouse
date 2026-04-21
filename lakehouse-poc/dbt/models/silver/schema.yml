@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: customers
+    description: Deduplicated customers — latest non-deleted row per id from bronze CDC stream.
+    columns:
+      - name: id
+        description: Primary key
+      - name: __op
+        description: CDC operation marker (c=create, u=update)
+
+  - name: products
+    description: Deduplicated products — latest non-deleted row per id from bronze CDC stream.
+    columns:
+      - name: id
+        description: Primary key
+
+  - name: orders
+    description: Deduplicated orders — latest non-deleted row per id from bronze CDC stream.
+    columns:
+      - name: id
+        description: Primary key

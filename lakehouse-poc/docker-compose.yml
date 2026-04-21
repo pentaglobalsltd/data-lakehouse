@@ -6,6 +6,10 @@ volumes:
   postgres_data:
   minio_data:
   superset_home:
+  airflow_logs:
+
+# Load credentials from .env (copy .env.example → .env and customise)
+# All variables fall back to safe defaults so the stack works without .env.
 
 services:
 
@@ -18,9 +22,9 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: lakeuser
-      POSTGRES_PASSWORD: lakepass
-      POSTGRES_DB: lakedb
+      POSTGRES_USER: ${POSTGRES_USER:-lakeuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lakepass}
+      POSTGRES_DB: ${POSTGRES_DB:-lakedb}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d
@@ -29,8 +33,9 @@ services:
         -c wal_level=logical
         -c max_replication_slots=5
         -c max_wal_senders=5
+        -c max_connections=200
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U lakeuser -d lakedb"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lakeuser} -d ${POSTGRES_DB:-lakedb}"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -83,13 +88,12 @@ services:
       start_period: 60s
 
   # ─── Kafka Connect (Debezium) ──────────────────────────────────────────────
+  # Port removed — external access via nginx on :8091
   kafka-connect:
     image: debezium/connect:2.5
     container_name: kafka-connect
     restart: unless-stopped
     networks: [lakehouse]
-    ports:
-      - "8083:8083"
     depends_on:
       kafka:
         condition: service_healthy
@@ -123,13 +127,13 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin123
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
     volumes:
       - minio_data:/data
     command: server /data --console-address ":9001"
     healthcheck:
-      test: ["CMD-SHELL", "mc alias set local http://localhost:9000 minioadmin minioadmin123 && mc ready local"]
+      test: ["CMD-SHELL", "mc alias set local http://localhost:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin123} && mc ready local"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -143,9 +147,12 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
     entrypoint: >
       /bin/sh -c "
-        mc alias set myminio http://minio:9000 minioadmin minioadmin123 &&
+        mc alias set myminio http://minio:9000 $${MINIO_ACCESS_KEY} $${MINIO_SECRET_KEY} &&
         mc mb --ignore-existing myminio/lakehouse &&
         echo 'Bucket lakehouse ready'
       "
@@ -162,8 +169,8 @@ services:
       minio-init:
         condition: service_completed_successfully
     environment:
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin123
+      AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
       AWS_REGION: us-east-1
       CATALOG_WAREHOUSE: s3://lakehouse/
       CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
@@ -176,14 +183,40 @@ services:
       retries: 20
       start_period: 20s
 
+  # ─── Hive Metastore ───────────────────────────────────────────────────────
+  # Backed by the existing Postgres container (database: metastore).
+  # Stores Trino view DDL so silver/gold views survive Trino restarts.
+  hive-metastore:
+    image: apache/hive:3.1.3
+    container_name: hive-metastore
+    restart: unless-stopped
+    networks: [lakehouse]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+    volumes:
+      - ./hive-metastore/entrypoint.sh:/init/entrypoint.sh:ro
+      - ./hive-metastore/metastore-site.xml:/opt/hive/conf/metastore-site.xml:ro
+      # postgresql-jdbc.jar downloaded by bootstrap.sh into hive-metastore/
+      - ./hive-metastore:/opt/hive/lib/extra:ro
+    entrypoint: ["/bin/bash", "/init/entrypoint.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9083' 2>/dev/null && echo ok"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
   # ─── Flink JobManager ─────────────────────────────────────────────────────
+  # Port removed from host — external access via nginx on :8090
   flink-jobmanager:
     image: flink:1.18.1-scala_2.12-java11
     container_name: flink-jobmanager
     restart: unless-stopped
     networks: [lakehouse]
-    ports:
-      - "8082:8081"
     command: >
       bash -c "mkdir -p /opt/flink/plugins/s3-fs-hadoop &&
       cp /opt/flink/opt/flink-s3-fs-hadoop-1.18.1.jar /opt/flink/plugins/s3-fs-hadoop/ &&
@@ -197,10 +230,14 @@ services:
         parallelism.default: 1
         state.backend: filesystem
         state.checkpoints.dir: s3://lakehouse/flink-checkpoints/
+        state.savepoints.dir: s3://lakehouse/flink-savepoints/
         s3.endpoint: http://minio:9000
         s3.path.style.access: true
-        s3.access-key: minioadmin
-        s3.secret-key: minioadmin123
+        s3.access-key: ${MINIO_ACCESS_KEY:-minioadmin}
+        s3.secret-key: ${MINIO_SECRET_KEY:-minioadmin123}
+        restart-strategy: fixed-delay
+        restart-strategy.fixed-delay.attempts: 3
+        restart-strategy.fixed-delay.delay: 30s
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8081/"]
       interval: 10s
@@ -229,12 +266,45 @@ services:
         taskmanager.numberOfTaskSlots: 4
         state.backend: filesystem
         state.checkpoints.dir: s3://lakehouse/flink-checkpoints/
+        state.savepoints.dir: s3://lakehouse/flink-savepoints/
         s3.endpoint: http://minio:9000
         s3.path.style.access: true
-        s3.access-key: minioadmin
-        s3.secret-key: minioadmin123
+        s3.access-key: ${MINIO_ACCESS_KEY:-minioadmin}
+        s3.secret-key: ${MINIO_SECRET_KEY:-minioadmin123}
+        restart-strategy: fixed-delay
+        restart-strategy.fixed-delay.attempts: 3
+        restart-strategy.fixed-delay.delay: 30s
+
+  # ─── Nginx (reverse proxy with basic auth) ────────────────────────────────
+  # :8090 → Flink UI + REST API (flink-jobmanager:8081)
+  # :8091 → Kafka Connect REST API (kafka-connect:8083)
+  # .htpasswd generated by bootstrap.sh from NGINX_USERNAME/NGINX_PASSWORD
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    restart: unless-stopped
+    networks: [lakehouse]
+    ports:
+      - "8090:8090"
+      - "8091:8091"
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+      kafka-connect:
+        condition: service_healthy
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8090/ 2>&1 | grep -q '401\\|200' && echo ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   # ─── Trino ────────────────────────────────────────────────────────────────
+  # HTTP :8080 — internal use (no auth, for dbt / Airflow / validate.sh)
+  # HTTPS :8443 — external admin access with password auth
   trino:
     image: trinodb/trino:438
     container_name: trino
@@ -242,12 +312,19 @@ services:
     networks: [lakehouse]
     ports:
       - "8080:8080"
+      - "8443:8443"
     depends_on:
       iceberg-rest:
+        condition: service_healthy
+      hive-metastore:
         condition: service_healthy
     volumes:
       - ./trino/config.properties:/etc/trino/config.properties
       - ./trino/catalog:/etc/trino/catalog
+      - ./trino/password-authenticator.properties:/etc/trino/password-authenticator.properties
+      # password.db and keystore.jks generated by bootstrap.sh
+      - ./trino/password.db:/etc/trino/password.db
+      - ./trino/keystore.jks:/etc/trino/keystore.jks
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/status"]
       interval: 10s
@@ -255,31 +332,30 @@ services:
       retries: 20
       start_period: 30s
 
-  # ─── Trino view init (one-shot, re-runs on every compose up) ──────────────
-  trino-init:
-    image: trinodb/trino:438
-    container_name: trino-init
+  # ─── dbt-init (replaces trino-init) ──────────────────────────────────────
+  # Runs dbt on every compose up to create/refresh silver + gold HMS-backed views.
+  dbt-init:
+    image: python:3.11-slim
+    container_name: dbt-init
     networks: [lakehouse]
     depends_on:
       trino:
         condition: service_healthy
+      hive-metastore:
+        condition: service_healthy
     volumes:
-      - ./scripts/create-views.sh:/create-views.sh:ro
+      - ./dbt:/opt/dbt
+      - ./scripts/create-views.sh:/opt/create-views.sh:ro
     environment:
       TRINO_HOST: trino
       TRINO_PORT: "8080"
+      DBT_DIR: /opt/dbt
     entrypoint:
       - /bin/bash
       - -c
       - |
-        echo "Waiting for Trino catalog to be ready..."
-        for i in $(seq 1 30); do
-          if trino --server http://trino:8080 --execute "SHOW SCHEMAS IN iceberg" >/dev/null 2>&1; then
-            break
-          fi
-          sleep 5
-        done
-        bash /create-views.sh
+        pip install dbt-trino --quiet
+        bash /opt/create-views.sh
 
   # ─── ClickHouse ───────────────────────────────────────────────────────────
   clickhouse:
@@ -290,6 +366,8 @@ services:
     ports:
       - "8123:8123"
       - "19000:9000"
+    environment:
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickpass123}
     volumes:
       - ./clickhouse/config.xml:/etc/clickhouse-server/config.d/custom.xml
       - ./clickhouse/users.xml:/etc/clickhouse-server/users.d/default-password.xml
@@ -302,6 +380,109 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
+
+  # ─── Airflow init (one-shot) ──────────────────────────────────────────────
+  airflow-init:
+    image: apache/airflow:2.8.1
+    container_name: airflow-init
+    networks: [lakehouse]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-lakeuser}:${POSTGRES_PASSWORD:-lakepass}@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-change-me-generate-with-fernet}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-airflowpass123}
+      _PIP_ADDITIONAL_REQUIREMENTS: "dbt-trino apache-airflow-providers-trino"
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        pip install dbt-trino apache-airflow-providers-trino --quiet
+        airflow db init
+        airflow users create \
+          --username admin \
+          --password "$${AIRFLOW_ADMIN_PASSWORD}" \
+          --firstname Admin --lastname User \
+          --email admin@lakehouse.local \
+          --role Admin 2>/dev/null || true
+        echo "Airflow init complete."
+
+  # ─── Airflow Webserver ────────────────────────────────────────────────────
+  airflow-webserver:
+    image: apache/airflow:2.8.1
+    container_name: airflow-webserver
+    restart: unless-stopped
+    networks: [lakehouse]
+    ports:
+      - "8089:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-lakeuser}:${POSTGRES_PASSWORD:-lakepass}@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-change-me-generate-with-fernet}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW_CONN_TRINO_DEFAULT: "trino://dbt@trino:8080/"
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickpass123}
+      TRINO_HOST: trino
+      TRINO_PORT: "8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./dbt:/opt/dbt
+      - ./scripts:/opt/scripts:ro
+      - airflow_logs:/opt/airflow/logs
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        pip install dbt-trino apache-airflow-providers-trino --quiet
+        exec airflow webserver
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  # ─── Airflow Scheduler ────────────────────────────────────────────────────
+  airflow-scheduler:
+    image: apache/airflow:2.8.1
+    container_name: airflow-scheduler
+    restart: unless-stopped
+    networks: [lakehouse]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-lakeuser}:${POSTGRES_PASSWORD:-lakepass}@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-change-me-generate-with-fernet}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW_CONN_TRINO_DEFAULT: "trino://dbt@trino:8080/"
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickpass123}
+      TRINO_HOST: trino
+      TRINO_PORT: "8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./dbt:/opt/dbt
+      - ./scripts:/opt/scripts:ro
+      - airflow_logs:/opt/airflow/logs
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        pip install dbt-trino apache-airflow-providers-trino --quiet
+        exec airflow scheduler
 
   # ─── Superset ─────────────────────────────────────────────────────────────
   superset:
@@ -318,7 +499,7 @@ services:
         condition: service_healthy
     environment:
       SUPERSET_SECRET_KEY: "lakehouse-poc-secret-key-change-in-production"
-      ADMIN_PASSWORD: admin
+      ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-admin}
     volumes:
       - ./superset/superset_config.py:/app/pythonpath/superset_config.py
       - superset_home:/app/superset_home
@@ -333,7 +514,7 @@ services:
           --firstname Admin \
           --lastname User \
           --email admin@lakehouse.local \
-          --password admin || true &&
+          --password $${ADMIN_PASSWORD} || true &&
         superset init &&
         gunicorn \
           --bind 0.0.0.0:8088 \

@@ -1,0 +1,14 @@
+version: 2
+
+models:
+  - name: order_summary
+    description: Gold aggregation — total revenue, order count, and avg order value by customer city.
+    columns:
+      - name: city
+        description: Customer city (group key)
+      - name: total_revenue
+        description: SUM of order total_amount
+      - name: order_count
+        description: COUNT of orders
+      - name: avg_order_value
+        description: AVG of order total_amount

@@ -2,7 +2,7 @@
 <clickhouse>
     <users>
         <default>
-            <password></password>
+            <password from_env="CLICKHOUSE_PASSWORD"></password>
             <networks>
                 <ip>::/0</ip>
             </networks>

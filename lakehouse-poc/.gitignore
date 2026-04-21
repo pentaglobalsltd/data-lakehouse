@@ -1,0 +1,20 @@
+# Credentials — never commit real credentials
+.env
+
+# Generated auth files
+nginx/.htpasswd
+trino/password.db
+trino/keystore.jks
+trino/server.crt
+trino/server.key
+
+# Hive Metastore — JDBC jar downloaded by bootstrap.sh
+hive-metastore/postgresql-jdbc.jar
+
+# Build artifacts
+flink-jobs/target/
+
+# dbt artifacts
+dbt/target/
+dbt/logs/
+dbt/.user.yml

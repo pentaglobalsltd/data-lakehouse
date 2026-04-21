@@ -1,0 +1,13 @@
+lakehouse:
+  target: dev
+  outputs:
+    dev:
+      type: trino
+      method: none
+      host: "{{ env_var('TRINO_HOST', 'trino') }}"
+      port: "{{ env_var('TRINO_PORT', '8080') | int }}"
+      user: dbt
+      database: lakehouse
+      schema: silver
+      threads: 1
+      http_scheme: http

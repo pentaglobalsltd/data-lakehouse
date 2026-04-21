@@ -12,6 +12,31 @@ warn()  { echo -e "${YELLOW}[bootstrap]${NC} $*"; }
 error() { echo -e "${RED}[bootstrap] ERROR:${NC} $*" >&2; exit 1; }
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Load .env (optional — stack uses defaults if absent)
+# ═══════════════════════════════════════════════════════════════════════════
+load_env() {
+  if [ -f "${PROJECT_DIR}/.env" ]; then
+    info "Loading credentials from .env ..."
+    set -a; source "${PROJECT_DIR}/.env"; set +a
+  else
+    warn ".env not found — using defaults. Copy .env.example → .env and set secure values."
+  fi
+  # Expose variables used by this script (fall back to defaults)
+  MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-minioadmin}"
+  MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-minioadmin123}"
+  POSTGRES_USER="${POSTGRES_USER:-lakeuser}"
+  POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-lakepass}"
+  TRINO_ADMIN_PASSWORD="${TRINO_ADMIN_PASSWORD:-trinopass123}"
+  NGINX_USERNAME="${NGINX_USERNAME:-admin}"
+  NGINX_PASSWORD="${NGINX_PASSWORD:-nginxpass123}"
+  CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-clickpass123}"
+  AIRFLOW_ADMIN_PASSWORD="${AIRFLOW_ADMIN_PASSWORD:-airflowpass123}"
+  export MINIO_ACCESS_KEY MINIO_SECRET_KEY POSTGRES_USER POSTGRES_PASSWORD \
+         TRINO_ADMIN_PASSWORD NGINX_USERNAME NGINX_PASSWORD \
+         CLICKHOUSE_PASSWORD AIRFLOW_ADMIN_PASSWORD
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
 # STEP 1 — Install Docker Engine + Compose plugin
 # ═══════════════════════════════════════════════════════════════════════════
 install_docker() {
@@ -36,11 +61,10 @@ install_docker() {
     docker-buildx-plugin docker-compose-plugin
   sudo usermod -aG docker "$USER" || true
   info "Docker installed: $(docker --version)"
-  info "Docker Compose: $(docker compose version)"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP 2 — Install Java 11 + Maven 3.8
+# STEP 2 — Install Java 11 + Maven
 # ═══════════════════════════════════════════════════════════════════════════
 install_java_maven() {
   if command -v java &>/dev/null && java -version 2>&1 | grep -q '11\.'; then
@@ -52,14 +76,76 @@ install_java_maven() {
     export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
     info "Java: $(java -version 2>&1 | head -1)"
   fi
-
   if command -v mvn &>/dev/null; then
-    info "Maven already installed ($(mvn --version | head -1)). Skipping."
+    info "Maven already installed. Skipping."
   else
-    info "Installing Maven 3.9..."
+    info "Installing Maven..."
     sudo apt-get install -y -qq maven
-    info "Maven: $(mvn --version | head -1)"
   fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 3 — Generate auth credentials (htpasswd, Trino keystore + password.db)
+# ═══════════════════════════════════════════════════════════════════════════
+generate_auth_artifacts() {
+  info "Generating auth artifacts..."
+  cd "$PROJECT_DIR"
+
+  # nginx .htpasswd (Apache MD5 — compatible with nginx auth_basic)
+  sudo apt-get install -y -qq apache2-utils 2>/dev/null || true
+  if command -v htpasswd &>/dev/null; then
+    htpasswd -cbm nginx/.htpasswd "$NGINX_USERNAME" "$NGINX_PASSWORD"
+  else
+    # Fallback: openssl APR1-MD5
+    HASH=$(openssl passwd -apr1 "$NGINX_PASSWORD")
+    echo "${NGINX_USERNAME}:${HASH}" > nginx/.htpasswd
+  fi
+  info "nginx/.htpasswd written."
+
+  # Trino self-signed TLS keystore (JKS) — needed for HTTPS password auth
+  if [ ! -f trino/keystore.jks ]; then
+    info "Generating self-signed Trino TLS keystore..."
+    keytool -genkeypair \
+      -alias trino \
+      -keyalg RSA \
+      -keysize 2048 \
+      -validity 3650 \
+      -keystore trino/keystore.jks \
+      -storepass trinokeystorepass \
+      -keypass trinokeystorepass \
+      -dname "CN=trino, OU=lakehouse, O=poc, L=local, S=local, C=US" \
+      2>/dev/null
+    info "Trino keystore generated."
+  else
+    info "Trino keystore already exists."
+  fi
+
+  # Trino password.db (bcrypt — required by file password authenticator)
+  info "Generating trino/password.db ..."
+  python3 - <<PYEOF
+import sys
+try:
+    import bcrypt
+except ImportError:
+    import subprocess
+    subprocess.run([sys.executable, '-m', 'pip', 'install', 'bcrypt', '-q'], check=True)
+    import bcrypt
+import os
+pw = os.environ.get('TRINO_ADMIN_PASSWORD', 'trinopass123').encode()
+h = bcrypt.hashpw(pw, bcrypt.gensalt()).decode()
+with open('trino/password.db', 'w') as f:
+    f.write(f"admin:{h}\n")
+print("trino/password.db written.")
+PYEOF
+
+  # Download Hive Metastore PostgreSQL JDBC driver
+  if [ ! -f hive-metastore/postgresql-jdbc.jar ]; then
+    info "Downloading PostgreSQL JDBC driver for Hive Metastore..."
+    curl -fsSL -o hive-metastore/postgresql-jdbc.jar \
+      https://jdbc.postgresql.org/download/postgresql-42.6.0.jar
+  fi
+
+  cd - > /dev/null
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -83,7 +169,6 @@ wait_healthy() {
   done
 }
 
-# Wait for a container that has no health check by polling a URL
 wait_url() {
   local label="$1"; local url="$2"; local max="${3:-120}"
   local elapsed=0
@@ -98,19 +183,30 @@ wait_url() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP 3 — Start all services
+# STEP 4 — Start all services
 # ═══════════════════════════════════════════════════════════════════════════
 start_services() {
   info "Starting all services with Docker Compose..."
   cd "$PROJECT_DIR"
+
+  # Ensure extra Postgres databases exist even if container was already initialized
+  # (02_extra_dbs.sql handles fresh installs; this handles existing volumes)
+  ensure_extra_dbs() {
+    for dbname in metastore airflow; do
+      docker exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_USER" -tc \
+        "SELECT 'CREATE DATABASE ${dbname}' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${dbname}')" \
+        | docker exec -i postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_USER" 2>/dev/null || true
+    done
+  }
+
   sudo docker compose up -d 2>&1 || docker compose up -d 2>&1
 
-  # Wait for core services in dependency order
   wait_healthy postgres     180
+  # Create metastore + airflow databases (idempotent)
+  ensure_extra_dbs
   wait_healthy zookeeper    120
   wait_healthy kafka        180
   wait_healthy minio        120
-  # minio-init is a one-shot container; wait for it to exit successfully
   info "Waiting for minio-init to complete..."
   timeout 120 bash -c '
     until [ "$(docker inspect --format="{{.State.Status}}" minio-init 2>/dev/null)" = "exited" ]; do
@@ -120,23 +216,36 @@ start_services() {
     [ "$EC" = "0" ] && echo "minio-init: done" || (echo "minio-init failed (exit $EC)" && exit 1)
   ' || error "minio-init did not complete successfully"
   wait_healthy iceberg-rest  120
+  wait_healthy hive-metastore 300
   wait_healthy kafka-connect 300
   wait_healthy flink-jobmanager 120
+  wait_healthy nginx         60
   wait_healthy trino         180
   wait_healthy clickhouse    120
   wait_healthy superset      240
+  info "Waiting for airflow-init to complete..."
+  timeout 300 bash -c '
+    until [ "$(docker inspect --format="{{.State.Status}}" airflow-init 2>/dev/null)" = "exited" ]; do
+      sleep 5
+    done
+    EC=$(docker inspect --format="{{.State.ExitCode}}" airflow-init)
+    [ "$EC" = "0" ] && echo "airflow-init: done" || (echo "airflow-init failed (exit $EC)" && exit 1)
+  ' || warn "airflow-init did not complete — check logs with: docker logs airflow-init"
+  wait_healthy airflow-webserver 120
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP 4 — Register Debezium connector
+# STEP 5 — Register Debezium connector (via nginx proxy)
 # ═══════════════════════════════════════════════════════════════════════════
 register_connector() {
   info "Registering Debezium connector..."
-  bash "${SCRIPT_DIR}/register-connector.sh"
+  CONNECT_URL="http://localhost:8091" \
+  CONNECT_BASIC_AUTH="${NGINX_USERNAME}:${NGINX_PASSWORD}" \
+    bash "${SCRIPT_DIR}/register-connector.sh"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP 5 — Build Flink fat JAR
+# STEP 6 — Build Flink fat JAR
 # ═══════════════════════════════════════════════════════════════════════════
 build_flink_jar() {
   info "Building Flink fat JAR..."
@@ -147,35 +256,84 @@ build_flink_jar() {
     error "Fat JAR not found after Maven build"
   fi
   info "Built: ${BUILT_FAT_JAR}"
+  cd - > /dev/null
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP 6 — Submit Flink JAR to JobManager
+# STEP 7 — Submit Flink JAR (with HA skip logic)
+# Checks GET /jobs before submitting:
+#   RUNNING → skip
+#   FAILED  → cancel, find latest savepoint, resubmit from savepoint if found
+#   absent  → fresh submit
 # ═══════════════════════════════════════════════════════════════════════════
 submit_flink_job() {
-  local fat_jar="$1"
-  local flink_url="http://localhost:8082"
-  info "Submitting Flink job from ${fat_jar} ..."
+  local fat_jar="${1:-}"
+  local flink_url="http://localhost:8090"
+  local auth_header="Authorization: Basic $(echo -n "${NGINX_USERNAME}:${NGINX_PASSWORD}" | base64)"
 
-  # Upload JAR
-  UPLOAD_RESP=$(curl -sf -X POST \
+  # ── Check current job state ──────────────────────────────────────────────
+  JOBS_JSON=$(curl -sf -H "$auth_header" "${flink_url}/jobs" 2>/dev/null || echo '{"jobs":[]}')
+  RUNNING_ID=$(echo "$JOBS_JSON" | python3 -c \
+    "import sys,json; jobs=json.load(sys.stdin)['jobs']; print(next((j['id'] for j in jobs if j['status']=='RUNNING'),''))" 2>/dev/null || echo "")
+  FAILED_ID=$(echo "$JOBS_JSON" | python3 -c \
+    "import sys,json; jobs=json.load(sys.stdin)['jobs']; print(next((j['id'] for j in jobs if j['status']=='FAILED'),''))" 2>/dev/null || echo "")
+
+  if [ -n "$RUNNING_ID" ]; then
+    info "Flink job already RUNNING (${RUNNING_ID}). Skipping submission."
+    return 0
+  fi
+
+  SAVEPOINT_PATH=""
+  if [ -n "$FAILED_ID" ]; then
+    warn "Found FAILED Flink job (${FAILED_ID}). Cancelling..."
+    curl -sf -H "$auth_header" -H "Content-Type: application/json" \
+      -X PATCH "${flink_url}/jobs/${FAILED_ID}" \
+      -d '{"targetState":"CANCELED"}' > /dev/null 2>&1 || true
+    sleep 5
+
+    # Look for a savepoint in MinIO
+    info "Checking for existing savepoints in MinIO..."
+    SAVEPOINT_PATH=$(docker run --rm --network lakehouse minio/mc:latest sh -c \
+      "mc alias set m http://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY} -q 2>/dev/null && \
+       mc ls m/lakehouse/flink-savepoints/ 2>/dev/null | awk '{print \$NF}' | sort | tail -1" \
+      2>/dev/null || echo "")
+    if [ -n "$SAVEPOINT_PATH" ]; then
+      SAVEPOINT_PATH="s3://lakehouse/flink-savepoints/${SAVEPOINT_PATH}"
+      info "Found savepoint: ${SAVEPOINT_PATH}"
+    else
+      warn "No savepoint found — submitting fresh."
+    fi
+  fi
+
+  if [ -z "$fat_jar" ]; then
+    fat_jar=$(find "${PROJECT_DIR}/flink-jobs/target" -name "*-fat.jar" | head -1)
+    [ -z "$fat_jar" ] && error "Fat JAR not found — run build_flink_jar first"
+  fi
+
+  info "Submitting Flink job from ${fat_jar} ..."
+  UPLOAD_RESP=$(curl -sf -H "$auth_header" -X POST \
     -F "jarfile=@${fat_jar}" \
     "${flink_url}/jars/upload")
-  JAR_ID=$(echo "$UPLOAD_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['filename'].split('/')[-1])")
+  JAR_ID=$(echo "$UPLOAD_RESP" | python3 -c \
+    "import sys,json; print(json.load(sys.stdin)['filename'].split('/')[-1])")
   info "JAR uploaded: ${JAR_ID}"
 
-  # Submit job
-  RUN_RESP=$(curl -sf -X POST \
-    -H "Content-Type: application/json" \
-    -d "{\"entryClass\": \"com.lakehouse.KafkaToIcebergJob\", \"parallelism\": 1}" \
-    "${flink_url}/jars/${JAR_ID}/run")
-  JOB_ID=$(echo "$RUN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['jobid'])")
+  # Build run body (optionally include savepoint)
+  if [ -n "$SAVEPOINT_PATH" ]; then
+    RUN_BODY="{\"entryClass\":\"com.lakehouse.KafkaToIcebergJob\",\"parallelism\":1,\"savepointPath\":\"${SAVEPOINT_PATH}\",\"allowNonRestoredState\":true}"
+  else
+    RUN_BODY='{"entryClass":"com.lakehouse.KafkaToIcebergJob","parallelism":1}'
+  fi
+
+  RUN_RESP=$(curl -sf -H "$auth_header" -H "Content-Type: application/json" \
+    -X POST -d "$RUN_BODY" "${flink_url}/jars/${JAR_ID}/run")
+  JOB_ID=$(echo "$RUN_RESP" | python3 -c \
+    "import sys,json; print(json.load(sys.stdin)['jobid'])")
   info "Flink job submitted: ${JOB_ID}"
 
-  # Wait for RUNNING
   elapsed=0
   while true; do
-    STATE=$(curl -sf "${flink_url}/jobs/${JOB_ID}" \
+    STATE=$(curl -sf -H "$auth_header" "${flink_url}/jobs/${JOB_ID}" \
       | python3 -c "import sys,json; print(json.load(sys.stdin)['state'])" 2>/dev/null || echo "UNKNOWN")
     if [ "$STATE" = "RUNNING" ]; then
       info "Flink job is RUNNING (${JOB_ID})"
@@ -192,10 +350,10 @@ submit_flink_job() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP 7 — Wait for Iceberg bronze tables to be seeded (first checkpoint)
+# STEP 8 — Wait for Iceberg bronze tables to be seeded
 # ═══════════════════════════════════════════════════════════════════════════
 wait_for_bronze_data() {
-  info "Waiting up to 120s for Iceberg bronze tables to be populated..."
+  info "Waiting up to 180s for Iceberg bronze tables to be populated..."
   elapsed=0
   while true; do
     COUNT=$(docker exec trino trino \
@@ -207,7 +365,7 @@ wait_for_bronze_data() {
       break
     fi
     if [ $elapsed -ge 180 ]; then
-      warn "Bronze tables still empty after 180s — continuing anyway."
+      warn "Bronze tables still empty after 180s — continuing anyway (dbt-init will retry)."
       break
     fi
     sleep 10; elapsed=$((elapsed + 10))
@@ -215,20 +373,14 @@ wait_for_bronze_data() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP 8 — Create Trino silver + gold views (tasks 6.4, 6.5)
-# ═══════════════════════════════════════════════════════════════════════════
-create_trino_views() {
-  info "Creating Trino silver and gold views..."
-  docker exec -e TRINO_HOST=localhost -e TRINO_PORT=8080 trino bash /create-views.sh
-  info "Trino views created."
-}
-
-# ═══════════════════════════════════════════════════════════════════════════
-# STEP 9 — Create ClickHouse table and populate (tasks 7.2, 7.3)
+# STEP 9 — Create ClickHouse table
+# ClickHouse population is now handled by the Airflow DAG on schedule.
 # ═══════════════════════════════════════════════════════════════════════════
 setup_clickhouse() {
-  info "Creating ClickHouse order_agg table..."
-  curl -sf http://localhost:8123/ -d "
+  info "Creating ClickHouse order_agg table schema..."
+  curl -sf "http://localhost:8123/" \
+    -u "default:${CLICKHOUSE_PASSWORD}" \
+    -d "
     CREATE TABLE IF NOT EXISTS default.order_agg (
         city            String,
         total_revenue   Float64,
@@ -236,35 +388,19 @@ setup_clickhouse() {
         avg_order_value Float64
     ) ENGINE = MergeTree()
     ORDER BY city" > /dev/null
-
-  info "Populating ClickHouse order_agg from Trino gold view..."
-  # Use Trino to read the gold view and insert into ClickHouse
-  docker exec trino trino \
-    --server http://localhost:8080 \
-    --execute "
-    INSERT INTO clickhouse.default.order_agg
-    SELECT
-      city,
-      CAST(total_revenue    AS DOUBLE),
-      CAST(order_count      AS BIGINT),
-      CAST(avg_order_value  AS DOUBLE)
-    FROM lakehouse.gold.order_summary
-    " 2>/dev/null || warn "ClickHouse population via Trino failed — run manually after bronze tables fill"
-
-  info "ClickHouse setup complete."
+  info "ClickHouse table ready. Initial population will run via Airflow DAG (lakehouse_pipeline)."
+  info "To trigger now: open Airflow at http://localhost:8089 and run the DAG manually."
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP 10 — Register Superset datasources via REST API (task 8.3)
+# STEP 10 — Register Superset datasources
 # ═══════════════════════════════════════════════════════════════════════════
 register_superset_datasources() {
   info "Registering Superset datasources..."
-
   SUPERSET_URL="http://localhost:8088"
-  # Obtain access token
   TOKEN=$(curl -sf -X POST "${SUPERSET_URL}/api/v1/security/login" \
     -H "Content-Type: application/json" \
-    -d '{"username":"admin","password":"admin","provider":"db","refresh":true}' \
+    -d "{\"username\":\"admin\",\"password\":\"${SUPERSET_ADMIN_PASSWORD:-admin}\",\"provider\":\"db\",\"refresh\":true}" \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null || echo "")
 
   if [ -z "$TOKEN" ]; then
@@ -275,36 +411,23 @@ register_superset_datasources() {
   auth_curl() { curl -sf -H "Authorization: Bearer ${TOKEN}" "$@"; }
 
   register_db() {
-    local name="$1"; local uri="$2"; local driver="$3"
-    # Check if already exists
+    local name="$1"; local uri="$2"
     EXISTING=$(auth_curl "${SUPERSET_URL}/api/v1/database/" \
       | python3 -c "import sys,json; dbs=json.load(sys.stdin).get('result',[]); \
         print(next((str(d['id']) for d in dbs if d['database_name']=='${name}'),''))" 2>/dev/null || echo "")
     if [ -n "$EXISTING" ]; then
-      info "Superset DB '${name}' already registered (id=${EXISTING})."
-      return
+      info "Superset DB '${name}' already registered."; return
     fi
     HTTP=$(auth_curl -o /tmp/ss_resp.json -w "%{http_code}" \
       -X POST "${SUPERSET_URL}/api/v1/database/" \
       -H "Content-Type: application/json" \
-      -d "{
-        \"database_name\": \"${name}\",
-        \"sqlalchemy_uri\": \"${uri}\",
-        \"expose_in_sqllab\": true,
-        \"allow_run_async\": false
-      }")
-    if [ "$HTTP" = "201" ]; then
-      info "Superset DB '${name}' registered."
-    else
-      warn "Superset DB '${name}' registration returned HTTP ${HTTP}"
-      cat /tmp/ss_resp.json || true
-    fi
+      -d "{\"database_name\":\"${name}\",\"sqlalchemy_uri\":\"${uri}\",\"expose_in_sqllab\":true,\"allow_run_async\":false}")
+    [ "$HTTP" = "201" ] && info "Superset DB '${name}' registered." || \
+      warn "Superset DB '${name}' HTTP ${HTTP}"
   }
 
-  register_db "Trino - Lakehouse"      "trino://admin@trino:8080/iceberg"                  "trino"
-  register_db "ClickHouse - Lakehouse" "clickhouse+http://default:@clickhouse:8123/default" "clickhouse"
-
-  info "Superset datasource registration complete."
+  register_db "Trino - Lakehouse"      "trino://admin@trino:8080/iceberg"
+  register_db "ClickHouse - Lakehouse" "clickhouse+http://default:${CLICKHOUSE_PASSWORD}@clickhouse:8123/default"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -314,27 +437,32 @@ main() {
   info "=== Lakehouse POC Bootstrap ==="
   info "Project dir: ${PROJECT_DIR}"
 
+  load_env
   install_docker
   install_java_maven
+  generate_auth_artifacts
   start_services
   register_connector
   build_flink_jar
   submit_flink_job "$BUILT_FAT_JAR"
   wait_for_bronze_data
-  create_trino_views
   setup_clickhouse
   register_superset_datasources
 
   echo ""
   info "=== Bootstrap Complete ==="
   echo ""
-  echo "  Flink UI:       http://localhost:8082"
-  echo "  Trino:          http://localhost:8080"
-  echo "  MinIO Console:  http://localhost:9001  (minioadmin / minioadmin123)"
-  echo "  ClickHouse:     http://localhost:8123"
-  echo "  Superset:       http://localhost:8088  (admin / admin)"
+  echo "  Flink UI (auth):      http://localhost:8090   (${NGINX_USERNAME} / <NGINX_PASSWORD>)"
+  echo "  Kafka Connect (auth): http://localhost:8091   (${NGINX_USERNAME} / <NGINX_PASSWORD>)"
+  echo "  Trino (HTTP):         http://localhost:8080   (internal, no auth)"
+  echo "  Trino (HTTPS+auth):   https://localhost:8443  (admin / <TRINO_ADMIN_PASSWORD>)"
+  echo "  MinIO Console:        http://localhost:9001   (${MINIO_ACCESS_KEY} / <MINIO_SECRET_KEY>)"
+  echo "  ClickHouse:           http://localhost:8123   (default / <CLICKHOUSE_PASSWORD>)"
+  echo "  Airflow:              http://localhost:8089   (admin / <AIRFLOW_ADMIN_PASSWORD>)"
+  echo "  Superset:             http://localhost:8088   (admin / <SUPERSET_ADMIN_PASSWORD>)"
   echo ""
-  echo "  Run validation: bash scripts/validate.sh"
+  echo "  Monitoring:   bash scripts/check-replication-lag.sh"
+  echo "  Validation:   bash scripts/validate.sh"
 }
 
 main "$@"

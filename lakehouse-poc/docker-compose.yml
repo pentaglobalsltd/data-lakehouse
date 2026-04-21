@@ -7,6 +7,7 @@ volumes:
   minio_data:
   superset_home:
   airflow_logs:
+  hive_lib:        # JDBC jar downloaded by hive-lib-init, shared into hive-metastore
 
 # Load credentials from .env (copy .env.example → .env and customise)
 # All variables fall back to safe defaults so the stack works without .env.
@@ -183,6 +184,27 @@ services:
       retries: 20
       start_period: 20s
 
+  # ─── Hive Metastore JDBC init ─────────────────────────────────────────────
+  # Alpine ships with wget. Downloads the PostgreSQL JDBC jar to a named volume
+  # so hive-metastore never needs curl/wget/apt inside the Hive image.
+  hive-lib-init:
+    image: alpine:3.19
+    container_name: hive-lib-init
+    networks: [lakehouse]
+    volumes:
+      - hive_lib:/hive-lib
+    command: >
+      sh -c "
+        JAR=/hive-lib/postgresql-jdbc.jar
+        if [ -f \"\$JAR\" ]; then
+          echo '[hive-lib-init] JDBC jar already present, skipping download.'
+        else
+          echo '[hive-lib-init] Downloading PostgreSQL JDBC driver...'
+          wget -q -O \"\$JAR\" https://jdbc.postgresql.org/download/postgresql-42.6.0.jar &&
+          echo '[hive-lib-init] Done.'
+        fi
+      "
+
   # ─── Hive Metastore ───────────────────────────────────────────────────────
   # Backed by the existing Postgres container (database: metastore).
   # Stores Trino view DDL so silver/gold views survive Trino restarts.
@@ -194,13 +216,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      hive-lib-init:
+        condition: service_completed_successfully
     environment:
       SERVICE_NAME: metastore
       DB_DRIVER: postgres
+      # IS_RESUME=true tells the standard /entrypoint.sh to skip its own schematool
+      # run — our custom entrypoint handles schema init idempotently.
       IS_RESUME: "true"
-      # SERVICE_OPTS passes JDBC config as JVM system properties — the officially
-      # supported mechanism for the apache/hive image. Belt-and-suspenders alongside
-      # metastore-site.xml so the connection works even if the XML isn't picked up.
+      # SERVICE_OPTS: JDBC config as JVM system properties (official mechanism).
       SERVICE_OPTS: >-
         -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
         -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/metastore
@@ -209,15 +233,14 @@ services:
     volumes:
       - ./hive-metastore/entrypoint.sh:/init/entrypoint.sh:ro
       - ./hive-metastore/metastore-site.xml:/opt/hive/conf/metastore-site.xml:ro
-      # postgresql-jdbc.jar downloaded by bootstrap.sh into hive-metastore/
-      - ./hive-metastore:/opt/hive/lib/extra:ro
+      - hive_lib:/opt/hive/lib/extra:ro
     entrypoint: ["/bin/bash", "/init/entrypoint.sh"]
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9083' 2>/dev/null && echo ok"]
       interval: 15s
       timeout: 10s
       retries: 20
-      start_period: 60s
+      start_period: 120s
 
   # ─── Flink JobManager ─────────────────────────────────────────────────────
   # Port removed from host — external access via nginx on :8090

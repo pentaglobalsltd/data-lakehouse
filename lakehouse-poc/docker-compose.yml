@@ -197,13 +197,14 @@ services:
       - sh
       - -c
       - |
-        JAR=/hive-lib/postgresql-jdbc.jar
-        if [ -f "$JAR" ]; then
+        set -e
+        if [ -f /hive-lib/postgresql-jdbc.jar ]; then
           echo "[hive-lib-init] JDBC jar already present, skipping download."
         else
           echo "[hive-lib-init] Downloading PostgreSQL JDBC driver..."
-          wget -q -O "$JAR" https://jdbc.postgresql.org/download/postgresql-42.6.0.jar
-          echo "[hive-lib-init] Done."
+          wget -q -O /hive-lib/postgresql-jdbc.jar \
+            https://jdbc.postgresql.org/download/postgresql-42.6.0.jar
+          echo "[hive-lib-init] Done: $(ls -lh /hive-lib/postgresql-jdbc.jar)"
         fi
 
   # ─── Hive Metastore ───────────────────────────────────────────────────────

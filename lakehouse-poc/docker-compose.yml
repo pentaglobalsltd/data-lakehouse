@@ -193,17 +193,17 @@ services:
     networks: [lakehouse]
     volumes:
       - hive_lib:/hive-lib
+      - ./hive-metastore/postgresql-42.6.0.jar:/src/postgresql-jdbc.jar:ro
     command:
       - sh
       - -c
       - |
         set -e
         if [ -f /hive-lib/postgresql-jdbc.jar ]; then
-          echo "[hive-lib-init] JDBC jar already present, skipping download."
+          echo "[hive-lib-init] JDBC jar already present, skipping copy."
         else
-          echo "[hive-lib-init] Downloading PostgreSQL JDBC driver..."
-          wget -q -O /hive-lib/postgresql-jdbc.jar \
-            https://jdbc.postgresql.org/download/postgresql-42.6.0.jar
+          echo "[hive-lib-init] Copying PostgreSQL JDBC driver from bind-mount..."
+          cp /src/postgresql-jdbc.jar /hive-lib/postgresql-jdbc.jar
           echo "[hive-lib-init] Done: $(ls -lh /hive-lib/postgresql-jdbc.jar)"
         fi
 

@@ -395,20 +395,47 @@ services:
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-change-me-generate-with-fernet}
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-airflowpass123}
-      _PIP_ADDITIONAL_REQUIREMENTS: "dbt-trino apache-airflow-providers-trino"
+      POSTGRES_USER: ${POSTGRES_USER:-lakeuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lakepass}
+      POSTGRES_DB: ${POSTGRES_DB:-lakedb}
     entrypoint:
       - /bin/bash
       - -c
       - |
+        set -e
         pip install dbt-trino apache-airflow-providers-trino --quiet
-        airflow db init
+
+        # Create airflow and metastore databases if they don't exist.
+        # Uses the source DB (lakedb) as the connection target since it is
+        # guaranteed to exist; lakeuser has superuser rights.
+        python3 - <<'PYEOF'
+        import psycopg2, os, sys
+        conn = psycopg2.connect(
+            host="postgres",
+            user=os.environ["POSTGRES_USER"],
+            password=os.environ["POSTGRES_PASSWORD"],
+            database=os.environ["POSTGRES_DB"],
+        )
+        conn.autocommit = True
+        cur = conn.cursor()
+        for db in ("airflow", "metastore"):
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db,))
+            if cur.fetchone():
+                print(f"[airflow-init] Database '{db}' already exists.")
+            else:
+                cur.execute(f"CREATE DATABASE {db}")
+                print(f"[airflow-init] Created database '{db}'.")
+        cur.close(); conn.close()
+        PYEOF
+
+        airflow db migrate
         airflow users create \
           --username admin \
           --password "$${AIRFLOW_ADMIN_PASSWORD}" \
           --firstname Admin --lastname User \
           --email admin@lakehouse.local \
           --role Admin 2>/dev/null || true
-        echo "Airflow init complete."
+        echo "[airflow-init] Airflow init complete."
 
   # ─── Airflow Webserver ────────────────────────────────────────────────────
   airflow-webserver:

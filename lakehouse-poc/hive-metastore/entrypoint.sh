@@ -17,7 +17,14 @@ if [ ! -f "$JDBC_JAR" ]; then
     echo "[hive-metastore] Copied JDBC driver from mounted volume."
   else
     echo "[hive-metastore] Downloading PostgreSQL JDBC driver (not pre-downloaded)..."
-    curl -fsSL -o "$JDBC_JAR" "$JDBC_URL"
+    if command -v wget &>/dev/null; then
+      wget -q -O "$JDBC_JAR" "$JDBC_URL"
+    elif command -v curl &>/dev/null; then
+      curl -fsSL -o "$JDBC_JAR" "$JDBC_URL"
+    else
+      echo "[hive-metastore] ERROR: neither wget nor curl found. Run bootstrap.sh first to pre-download the JDBC jar."
+      exit 1
+    fi
     echo "[hive-metastore] JDBC driver downloaded."
   fi
 fi

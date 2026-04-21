@@ -9,7 +9,8 @@ trino/server.crt
 trino/server.key
 
 # Hive Metastore — JDBC jar downloaded by bootstrap.sh
-#hive-metastore/postgresql-jdbc.jar
+hive-metastore/postgresql-jdbc.jar
+hive-metastore/postgresql-42.6.0.jar
 
 # Build artifacts
 flink-jobs/target/

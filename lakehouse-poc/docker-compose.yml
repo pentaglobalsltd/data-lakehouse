@@ -26,6 +26,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-lakeuser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lakepass}
       POSTGRES_DB: ${POSTGRES_DB:-lakedb}
+      POSTGRES_HOST_AUTH_METHOD: md5
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d

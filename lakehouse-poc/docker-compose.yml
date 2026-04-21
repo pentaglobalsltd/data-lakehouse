@@ -193,17 +193,18 @@ services:
     networks: [lakehouse]
     volumes:
       - hive_lib:/hive-lib
-    command: >
-      sh -c "
+    command:
+      - sh
+      - -c
+      - |
         JAR=/hive-lib/postgresql-jdbc.jar
-        if [ -f \"\$JAR\" ]; then
-          echo '[hive-lib-init] JDBC jar already present, skipping download.'
+        if [ -f "$JAR" ]; then
+          echo "[hive-lib-init] JDBC jar already present, skipping download."
         else
-          echo '[hive-lib-init] Downloading PostgreSQL JDBC driver...'
-          wget -q -O \"\$JAR\" https://jdbc.postgresql.org/download/postgresql-42.6.0.jar &&
-          echo '[hive-lib-init] Done.'
+          echo "[hive-lib-init] Downloading PostgreSQL JDBC driver..."
+          wget -q -O "$JAR" https://jdbc.postgresql.org/download/postgresql-42.6.0.jar
+          echo "[hive-lib-init] Done."
         fi
-      "
 
   # ─── Hive Metastore ───────────────────────────────────────────────────────
   # Backed by the existing Postgres container (database: metastore).

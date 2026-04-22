@@ -91,7 +91,18 @@ generate_auth_artifacts() {
   info "Generating auth artifacts..."
   cd "$PROJECT_DIR"
 
+  # Docker Compose creates a directory placeholder when a bind-mounted file doesn't
+  # exist yet. Remove any such placeholders before writing the real files.
+  _ensure_file_not_dir() {
+    local path="$1"
+    if [ -d "$path" ]; then
+      info "Removing Docker-created directory placeholder: $path"
+      sudo rm -rf "$path"
+    fi
+  }
+
   # nginx .htpasswd (Apache MD5 — compatible with nginx auth_basic)
+  _ensure_file_not_dir nginx/.htpasswd
   sudo apt-get install -y -qq apache2-utils 2>/dev/null || true
   if command -v htpasswd &>/dev/null; then
     htpasswd -cbm nginx/.htpasswd "$NGINX_USERNAME" "$NGINX_PASSWORD"
@@ -102,25 +113,26 @@ generate_auth_artifacts() {
   fi
   info "nginx/.htpasswd written."
 
-  # Trino self-signed TLS keystore (JKS) — needed for HTTPS password auth
-  if [ ! -f trino/keystore.jks ]; then
-    info "Generating self-signed Trino TLS keystore..."
-    keytool -genkeypair \
-      -alias trino \
-      -keyalg RSA \
-      -keysize 2048 \
-      -validity 3650 \
-      -keystore trino/keystore.jks \
-      -storepass trinokeystorepass \
-      -keypass trinokeystorepass \
-      -dname "CN=trino, OU=lakehouse, O=poc, L=local, S=local, C=US" \
+  # Trino self-signed TLS certificate (PEM) — Trino 391+ uses PEM, not JKS
+  _ensure_file_not_dir trino/trino-keystore.pem
+  if [ ! -f trino/trino-keystore.pem ]; then
+    info "Generating self-signed Trino TLS certificate (PEM)..."
+    openssl req -newkey rsa:2048 -nodes \
+      -keyout trino/trino-key.pem \
+      -x509 -days 3650 -out trino/trino-cert.pem \
+      -subj "/CN=trino/OU=lakehouse/O=poc/L=local/ST=local/C=US" \
       2>/dev/null
-    info "Trino keystore generated."
+    cat trino/trino-cert.pem trino/trino-key.pem > trino/trino-keystore.pem
+    rm -f trino/trino-key.pem trino/trino-cert.pem
+    info "Trino PEM certificate generated."
   else
-    info "Trino keystore already exists."
+    info "Trino PEM certificate already exists."
   fi
+  # Clean up legacy JKS placeholder if present
+  _ensure_file_not_dir trino/keystore.jks
 
   # Trino password.db (bcrypt — required by file password authenticator)
+  _ensure_file_not_dir trino/password.db
   info "Generating trino/password.db ..."
   python3 - <<PYEOF
 import sys
@@ -139,6 +151,7 @@ print("trino/password.db written.")
 PYEOF
 
   # Download Hive Metastore PostgreSQL JDBC driver
+  _ensure_file_not_dir hive-metastore/postgresql-jdbc.jar
   if [ ! -f hive-metastore/postgresql-jdbc.jar ]; then
     info "Downloading PostgreSQL JDBC driver for Hive Metastore..."
     curl -fsSL -o hive-metastore/postgresql-jdbc.jar \

@@ -206,9 +206,9 @@ start_services() {
   # (02_extra_dbs.sql handles fresh installs; this handles existing volumes)
   ensure_extra_dbs() {
     for dbname in metastore airflow; do
-      docker exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_USER" -tc \
+      docker exec postgres psql -U "$POSTGRES_USER" -d postgres -tc \
         "SELECT 'CREATE DATABASE ${dbname}' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${dbname}')" \
-        | docker exec -i postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_USER" 2>/dev/null || true
+        | docker exec -i postgres psql -U "$POSTGRES_USER" -d postgres 2>/dev/null || true
     done
   }
 

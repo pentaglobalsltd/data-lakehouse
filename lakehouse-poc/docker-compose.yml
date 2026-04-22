@@ -331,7 +331,7 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/.htpasswd:/etc/nginx/.htpasswd:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8090/ 2>&1 | grep -q '401\\|200' && echo ok"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8090/ 2>&1; s=$?; [ $s -eq 0 ] || [ $s -eq 8 ]"]
       interval: 10s
       timeout: 5s
       retries: 10

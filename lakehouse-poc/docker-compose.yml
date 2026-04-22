@@ -194,7 +194,7 @@ services:
     networks: [lakehouse]
     volumes:
       - hive_lib:/hive-lib
-      - ./hive-metastore/postgresql-42.6.0.jar:/src/postgresql-jdbc.jar:ro
+      - ./hive-metastore/postgresql-jdbc.jar:/src/postgresql-jdbc.jar:ro
     command:
       - sh
       - -c
@@ -212,7 +212,8 @@ services:
   # Backed by the existing Postgres container (database: metastore).
   # Stores Trino view DDL so silver/gold views survive Trino restarts.
   hive-metastore:
-    image: apache/hive:3.1.3
+    build: ./hive-metastore
+    image: hive-metastore-patched:3.1.3
     container_name: hive-metastore
     restart: unless-stopped
     networks: [lakehouse]

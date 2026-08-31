@@ -314,3 +314,6 @@ Set `SLACK_WEBHOOK_URL` in `.env` to receive alerts on failure. The check runs a
 | Trino HTTP for internal + HTTPS for external | Avoids breaking all internal tooling while adding external auth |
 | ClickHouse sync via Trino INSERT SELECT | Leverages existing Trino federated query; idempotent with TRUNCATE-first |
 | Savepoints in MinIO | Co-located with checkpoints; no ZooKeeper or external HA coordinator needed |
+
+
+<!-- Security scan triggered at 2026-08-31 17:03:11 -->

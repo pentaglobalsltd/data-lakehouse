@@ -316,12 +316,7 @@ Set `SLACK_WEBHOOK_URL` in `.env` to receive alerts on failure. The check runs a
 | Savepoints in MinIO | Co-located with checkpoints; no ZooKeeper or external HA coordinator needed |
 
 
-<!-- Security scan triggered at 2026-08-31 17:03:11 -->
 
-<!-- Security scan triggered at 2026-08-31 16:48:30 -->
 
-<!-- Security scan triggered at 2026-08-31 18:35:43 -->
 
-<!-- Security scan triggered at 2026-09-02 07:11:40 -->
 
-<!-- Security scan triggered at 2026-09-02 07:12:32 -->
